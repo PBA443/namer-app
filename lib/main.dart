@@ -1,8 +1,13 @@
 import 'package:english_words/english_words.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:http/http.dart' as http; // Import http package
-import 'dart:convert'; // For JSON encoding/decoding
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+import 'package:namer_app/screens/login_page.dart';
+import 'package:namer_app/services/auth_service.dart'; // Import AuthService
+import 'package:namer_app/models/user_model.dart'; // Import User model
+//import 'package:namer_app/screens/register_page.dart'; // To navigate to register page
 
 void main() {
   runApp(MyApp());
@@ -21,7 +26,16 @@ class MyApp extends StatelessWidget {
           colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
           useMaterial3: true,
         ),
-        home: MyHomePage(),
+        // Start with a consumer to decide initial page based on login status
+        home: Consumer<MyAppState>(
+          builder: (context, appState, child) {
+            if (appState.currentUser != null) {
+              return MyHomePage(); // Show main app if logged in
+            } else {
+              return LoginPage(); // Show login page if not logged in
+            }
+          },
+        ),
       ),
     );
   }
@@ -30,10 +44,61 @@ class MyApp extends StatelessWidget {
 class MyAppState extends ChangeNotifier {
   var current = WordPair.random();
   final String _baseUrl = 'https://api.donbhagy.com/api'; // Your backend URL
+  late final AuthService _authService; // Declare AuthService
+
+  User? _currentUser; // To hold the current logged-in user
+  User? get currentUser => _currentUser;
 
   MyAppState() {
+    _authService = AuthService(_baseUrl); // Initialize AuthService
+    _initializeUser(); // Check for existing user on startup
     fetchFavorites(); // Fetch favorites when the app starts
   }
+
+  Future<void> _initializeUser() async {
+    _currentUser = await _authService.getCurrentUser();
+    notifyListeners();
+  }
+
+  // --- Authentication Methods (delegated to AuthService) ---
+  Future<void> login(String username, String password) async {
+    try {
+      _currentUser = await _authService.login(
+        username: username,
+        password: password,
+      );
+      notifyListeners();
+      // After successful login, you might want to fetch user-specific data like favorites
+      fetchFavorites();
+    } catch (e) {
+      // Rethrow to be caught by the UI
+      rethrow;
+    }
+  }
+
+  Future<void> register(String username, String email, String password) async {
+    try {
+      // In a typical flow, after registration, the user might be automatically logged in
+      // or redirected to the login page. For now, we'll just register.
+      await _authService.register(
+        username: username,
+        email: email,
+        password: password,
+      );
+    } catch (e) {
+      // Rethrow to be caught by the UI
+      rethrow;
+    }
+  }
+
+  Future<void> logout() async {
+    await _authService.logout();
+    _currentUser = null;
+    favorites.clear(); // Clear favorites on logout
+    notifyListeners();
+  }
+
+  // --- Existing Word Pair and Favorite Methods ---
 
   void getNext() {
     current = WordPair.random();
@@ -41,21 +106,33 @@ class MyAppState extends ChangeNotifier {
   }
 
   // Use a Set for faster lookups and to prevent duplicates
-  var favorites = <WordPair>{}; // Changed to Set
-
-  // --- Backend Interaction Methods ---
+  var favorites = <WordPair>{};
 
   Future<void> fetchFavorites() async {
+    if (_currentUser == null) {
+      // If no user is logged in, clear favorites and do not fetch
+      favorites.clear();
+      notifyListeners();
+      return;
+    }
+    // You'll need to modify your backend to return user-specific favorites
+    // and include the user's token in the request headers.
     try {
-      final response = await http.get(Uri.parse('$_baseUrl/favorites'));
+      final response = await http.get(
+        Uri.parse('$_baseUrl/favorites'),
+        headers: {
+          'Authorization': 'Bearer ${_currentUser!.token}', // Send token
+        },
+      );
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
         favorites = data
             .map((item) => WordPair(item['first_word'], item['second_word']))
-            .toSet(); // Convert back to WordPair and Set
+            .toSet();
         notifyListeners();
       } else {
         print('Failed to load favorites: ${response.statusCode}');
+        // Optionally handle cases like token expiry here (e.g., auto-logout)
       }
     } catch (e) {
       print('Error fetching favorites: $e');
@@ -63,26 +140,31 @@ class MyAppState extends ChangeNotifier {
   }
 
   Future<void> toggleFavorite() async {
-    // Check if it's already a favorite on the frontend
+    if (_currentUser == null) {
+      // Optionally show a message to log in first
+      print('Please log in to manage favorites.');
+      return;
+    }
     if (favorites.contains(current)) {
-      // If it is, attempt to remove it from the backend
       await removeFavorite(current);
     } else {
-      // If not, attempt to add it to the backend
       await addFavorite(current);
     }
   }
 
   Future<void> addFavorite(WordPair pair) async {
+    if (_currentUser == null) return;
     try {
       final response = await http.post(
         Uri.parse('$_baseUrl/favorites'),
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ${_currentUser!.token}', // Send token
+        },
         body: json.encode({'firstWord': pair.first, 'secondWord': pair.second}),
       );
 
       if (response.statusCode == 201) {
-        // Only add to local state if backend operation was successful
         favorites.add(pair);
         notifyListeners();
         print('Added favorite: ${pair.asLowerCase}');
@@ -97,24 +179,26 @@ class MyAppState extends ChangeNotifier {
   }
 
   Future<void> removeFavorite(WordPair pair) async {
+    if (_currentUser == null) return;
     try {
       final response = await http.delete(
         Uri.parse('$_baseUrl/favorites'),
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ${_currentUser!.token}', // Send token
+        },
         body: json.encode({'firstWord': pair.first, 'secondWord': pair.second}),
       );
 
       if (response.statusCode == 200) {
-        favorites.remove(
-          pair,
-        ); // Only remove from local state if backend successful
+        favorites.remove(pair);
         notifyListeners();
         print('Removed favorite: ${pair.asLowerCase}');
       } else if (response.statusCode == 404) {
         print(
           'Favorite not found on server (already removed?): ${pair.asLowerCase}',
         );
-        favorites.remove(pair); // Sync frontend if not found on backend
+        favorites.remove(pair);
         notifyListeners();
       } else {
         print(
@@ -127,9 +211,6 @@ class MyAppState extends ChangeNotifier {
   }
 }
 
-// (The rest of your UI widgets like MyHomePage, GeneratorPage, FavoritesPage, BigCard remain mostly the same,
-// but ensure they call the new async methods in MyAppState.)
-
 class MyHomePage extends StatefulWidget {
   @override
   State<MyHomePage> createState() => _MyHomePageState();
@@ -141,6 +222,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    var appState = context.watch<MyAppState>(); // Watch MyAppState
     Widget page;
     switch (selectedIndex) {
       case 0:
@@ -154,12 +236,31 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     return Scaffold(
+      appBar: AppBar(
+        title: const Text('Namer App'),
+        actions: [
+          if (appState.currentUser != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0),
+              child: Center(
+                child: Text('Logged in as: ${appState.currentUser!.username}'),
+              ),
+            ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () async {
+              await appState.logout();
+            },
+            tooltip: 'Logout',
+          ),
+        ],
+      ),
       body: Row(
         children: [
           SafeArea(
             child: NavigationRail(
               extended: extended,
-              destinations: [
+              destinations: const [
                 NavigationRailDestination(
                   icon: Icon(Icons.home),
                   label: Text('Home'),
@@ -175,7 +276,6 @@ class _MyHomePageState extends State<MyHomePage> {
                   selectedIndex = value;
                   extended = false;
                 });
-                // Optional: Re-fetch favorites when navigating to the Favorites tab
                 if (value == 1) {
                   Provider.of<MyAppState>(
                     context,
@@ -224,13 +324,13 @@ class GeneratorPage extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           BigCard(pair: pair),
-          SizedBox(height: 10),
+          const SizedBox(height: 10),
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               ElevatedButton.icon(
                 onPressed: () {
-                  appState.toggleFavorite(); // Calls async method
+                  appState.toggleFavorite();
                 },
                 icon: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 200),
@@ -240,14 +340,14 @@ class GeneratorPage extends StatelessWidget {
                       },
                   child: Icon(icon, key: ValueKey<IconData>(icon)),
                 ),
-                label: Text('Like'),
+                label: const Text('Like'),
               ),
-              SizedBox(width: 10),
+              const SizedBox(width: 10),
               ElevatedButton(
                 onPressed: () {
                   appState.getNext();
                 },
-                child: Text('Next'),
+                child: const Text('Next'),
               ),
             ],
           ),
@@ -261,8 +361,7 @@ class FavoritesPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     var appState = context.watch<MyAppState>();
-    var favoritesList = appState.favorites
-        .toList(); // Convert Set to List for ListView
+    var favoritesList = appState.favorites.toList();
 
     if (favoritesList.isEmpty) {
       return Center(
@@ -285,15 +384,15 @@ class FavoritesPage extends StatelessWidget {
         ),
         for (var pair in favoritesList)
           ListTile(
-            leading: Icon(Icons.favorite),
+            leading: const Icon(Icons.favorite),
             title: Text(
               pair.asLowerCase,
               semanticsLabel: "${pair.first} ${pair.second}",
             ),
             trailing: IconButton(
-              icon: Icon(Icons.delete_outline),
+              icon: const Icon(Icons.delete_outline),
               onPressed: () {
-                appState.removeFavorite(pair); // Calls async method
+                appState.removeFavorite(pair);
               },
               tooltip: 'Remove from favorites',
             ),
