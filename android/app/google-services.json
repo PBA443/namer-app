@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "829713640990",
+    "project_id": "staff-ride-98171",
+    "storage_bucket": "staff-ride-98171.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:829713640990:android:ea8d3ac08ff8fd49ff880f",
+        "android_client_info": {
+          "package_name": "com.example.namer_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "829713640990-a7lr2ghsunlauhcnkbp6ujikfql5a7cr.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.namer_app",
+            "certificate_hash": "8ed4a5b508a298eef9d89286c1b52e25a752b2f2"
+          }
+        },
+        {
+          "client_id": "829713640990-63phop8t2dfhatuaumh7cqhvhl0trltm.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCfN9oTPr-uJKpzENucOQLCEcgWLwzpjeY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "829713640990-63phop8t2dfhatuaumh7cqhvhl0trltm.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "829713640990-6ds1eip6hcdv0easlrmnl28o50eq0hl1.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.flutterTest1"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
