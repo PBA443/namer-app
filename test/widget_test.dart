@@ -8,23 +8,38 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:namer_app/main.dart';
+import 'package:staff_ride/app.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  // 'testWidgets' function එකෙන් අපි test case එකක් define කරනවා.
+  // පළවෙනියට දෙන්නේ test එකේ නම/විස්තරය.
+  testWidgets('SignInPage UI Test - Verifies content is displayed correctly', (
+    WidgetTester tester,
+  ) async {
+    // පියවර 1: අපේ app එක build කරනවා
+    // tester.pumpWidget() එකෙන් අපි test කරන්න ඕන widget එක test environment එකේ render කරනවා.
+    // මෙතනදී අපි සම්පූර්ණ StaffRideApp එකම දෙනවා, මොකද ඒකේ තමයි MaterialApp එක තියෙන්නේ.
+    await tester.pumpWidget(const StaffRideApp());
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    // පියවර 2: UI එකේ තියෙන දේවල් හරිද කියලා පරීක්ෂා කරනවා
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    // 'find.text()' එකෙන් අදාළ text එක තියෙන widget එකක් තියෙනවද කියලා හොයනවා.
+    // 'expect()' function එකෙන්, අපි හොයපු දේ ('findsOneWidget' - එක widget එකක් හම්බවෙන්න ඕන)
+    // ඇත්තටම වෙලාද කියලා තහවුරු කරනවා.
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    // ප්‍රධාන මාතෘකාව තියෙනවද කියලා බලනවා
+    expect(find.text('Flutter Run Test Successful!'), findsOneWidget);
+
+    // උප මාතෘකාව තියෙනවද කියලා බලනවා
+    expect(
+      find.text('Your file structure is working perfectly.'),
+      findsOneWidget,
+    );
+
+    // කොළ පාට හරි ලකුණ (Icon) තියෙනවද කියලා බලනවා
+    expect(find.byIcon(Icons.check_circle), findsOneWidget);
+
+    // AppBar එකේ title එක තියෙනවද කියලා බලනවා
+    expect(find.text('StaffRide App'), findsOneWidget);
   });
 }
