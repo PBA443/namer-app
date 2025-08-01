@@ -1,61 +1,55 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart'; // debugPrint සඳහා
+import 'package:flutter/foundation.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 class FirestoreService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   final String _usersCollection = 'users';
+  final String _tripsCollection = 'trips';
+  final String _bookingsCollection = 'bookings';
 
-  // --- User කෙනෙක්ගේ Role එක Database එකේ Save කිරීම ---
+  // ------------------------ USER SECTION ------------------------
+
   Future<void> createUserProfile({
     required User user,
     required String role,
   }) async {
     try {
-      await _db.collection(_usersCollection).doc(user.uid).set(
-        {
-          'uid': user.uid,
-          'email': user.email,
-          'displayName': user.displayName,
-          'photoURL': user.photoURL,
-          'role': role,
-          'createdAt': FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      ); // merge: true මගින් දැනටමත් ඇති fields overwrite නොකරයි
+      await _db.collection(_usersCollection).doc(user.uid).set({
+        'uid': user.uid,
+        'email': user.email,
+        'displayName': user.displayName,
+        'photoURL': user.photoURL,
+        'role': role,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
     } catch (e) {
-      debugPrint("Error creating user profile: $e");
+      debugPrint("🔥 Error creating user profile: $e");
       rethrow;
     }
   }
 
-  // --- User කෙනෙක්ගේ profile එකක් තියෙනවද කියලා check කිරීම ---
   Future<bool> doesUserProfileExist(String uid) async {
     try {
       final doc = await _db.collection(_usersCollection).doc(uid).get();
       return doc.exists;
     } catch (e) {
-      debugPrint("Error checking user profile existence: $e");
+      debugPrint("🔥 Error checking user profile existence: $e");
       return false;
     }
   }
 
-  // --- User කෙනෙක්ගේ සම්පූර්ණ profile data එක ලබා ගැනීම ---
-  // මෙය AuthGate එකට user ගේ role එක කියවීමට අවශ්‍ය වේ.
   Future<Map<String, dynamic>?> getUserProfile(String uid) async {
     try {
       final doc = await _db.collection(_usersCollection).doc(uid).get();
-      if (doc.exists) {
-        return doc.data(); // Document එකේ සියලු දත්ත Map එකක් ලෙස ලබා දෙයි
-      }
-      return null; // Profile එකක් හමු නොවූ විට
+      return doc.exists ? doc.data() : null;
     } catch (e) {
-      debugPrint("Error getting user profile: $e");
+      debugPrint("🔥 Error fetching user profile: $e");
       return null;
     }
   }
 
-  // --- User ගේ personal information ටික Firestore එකේ update කරනවා ---
   Future<void> updateUserData({
     required String uid,
     required String firstName,
@@ -68,7 +62,7 @@ class FirestoreService {
     required String officeLocation,
   }) async {
     try {
-      await _db.collection(_usersCollection).doc(uid).set({
+      await _db.collection(_usersCollection).doc(uid).update({
         'firstName': firstName,
         'lastName': lastName,
         'nic': nic,
@@ -79,14 +73,13 @@ class FirestoreService {
         'officeLocation': officeLocation,
         'profileCompleted': true,
         'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      });
     } catch (e) {
-      debugPrint("Error updating user data: $e");
+      debugPrint("🔥 Error updating user data: $e");
       rethrow;
     }
   }
 
-  // --- Driver ගේ personal information ටික Firestore එකේ update කරනවා ---
   Future<void> updateDriverData({
     required String uid,
     required String firstName,
@@ -96,7 +89,7 @@ class FirestoreService {
     required String phoneNumber,
   }) async {
     try {
-      await _db.collection(_usersCollection).doc(uid).set({
+      await _db.collection(_usersCollection).doc(uid).update({
         'firstName': firstName,
         'lastName': lastName,
         'nic': nic,
@@ -104,10 +97,118 @@ class FirestoreService {
         'phoneNumber': phoneNumber,
         'profileCompleted': true,
         'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      });
     } catch (e) {
-      debugPrint("Error updating driver data: $e");
+      debugPrint("🔥 Error updating driver data: $e");
       rethrow;
     }
+  }
+
+  // ------------------------ TRIP SECTION ------------------------
+
+  Future<void> createTrip({
+    required User driver,
+    required List<LatLng> routePoints,
+    required String startAddress,
+    required String endAddress,
+    required String distance,
+    required String duration,
+    required DateTime startTime,
+    required DateTime endTime,
+    String? recurringId,
+  }) async {
+    try {
+      await _db.collection(_tripsCollection).add({
+        'driverId': driver.uid,
+        'driverName': driver.displayName,
+        'driverPhotoUrl': driver.photoURL,
+        'startAddress': startAddress,
+        'endAddress': endAddress,
+        'distance': distance,
+        'duration': duration,
+        'startTime': Timestamp.fromDate(startTime),
+        'endTime': Timestamp.fromDate(endTime),
+        'routePoints': routePoints
+            .map((p) => GeoPoint(p.latitude, p.longitude))
+            .toList(),
+        'status': 'active',
+        'recurringId': recurringId,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint("🔥 Error creating trip: $e");
+      rethrow;
+    }
+  }
+
+  Stream<QuerySnapshot> getDriverTrips(String driverId) {
+    try {
+      return _db
+          .collection(_tripsCollection)
+          .where('driverId', isEqualTo: driverId)
+          .orderBy('startTime', descending: true)
+          .snapshots();
+    } catch (e) {
+      debugPrint("🔥 Error fetching driver trips: $e");
+      rethrow;
+    }
+  }
+
+  Stream<QuerySnapshot> getAvailableTrips() {
+    try {
+      return _db
+          .collection(_tripsCollection)
+          .where('status', isEqualTo: 'active')
+          .where('startTime', isGreaterThan: Timestamp.now())
+          .orderBy('startTime')
+          .snapshots();
+    } catch (e) {
+      debugPrint("🔥 Error fetching available trips: $e");
+      rethrow;
+    }
+  }
+
+  Future<void> updateTripStatus(String tripId, String status) async {
+    try {
+      await _db.collection(_tripsCollection).doc(tripId).update({
+        'status': status,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint("🔥 Error updating trip status: $e");
+      rethrow;
+    }
+  }
+
+  // ------------------------ BOOKING SECTION ------------------------
+
+  Future<String> createBooking({
+    required String tripId,
+    required String driverId,
+    required User user,
+  }) async {
+    try {
+      final bookingRef = await _db.collection(_bookingsCollection).add({
+        'tripId': tripId,
+        'driverId': driverId,
+        'userId': user.uid,
+        'userName': user.displayName,
+        'userPhotoUrl': user.photoURL,
+        'status': 'booked',
+        'bookedAt': FieldValue.serverTimestamp(),
+      });
+      return bookingRef.id;
+    } catch (e) {
+      debugPrint("🔥 Error creating booking: $e");
+      rethrow;
+    }
+  }
+
+  Stream<QuerySnapshot> getBookingsForTrip(String tripId) {
+    return _db
+        .collection(_bookingsCollection)
+        .where('tripId', isEqualTo: tripId)
+        .where('status', isEqualTo: 'booked')
+        .snapshots();
   }
 }

@@ -6,7 +6,7 @@ import '../../../../data/services/firestore_service.dart';
 import 'signin_page.dart';
 import 'role_selection_page.dart';
 import '../../user_panel/home/screens/user_home_page.dart'; // User role එකට අදාළ home page එක
-import '../../driver_panel/dashboard/screens/driver_home_page.dart'; // Driver role එකට අදාළ home page එක
+import '../../driver_panel/dashboard/screens/driver_dashboard_page.dart'; // Driver role එකට අදාළ home page එක
 
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
@@ -53,7 +53,7 @@ class AuthGate extends StatelessWidget {
                   return UserHomePage();
                 } else if (userRole == 'driver') {
                   // role එක 'driver' නම්
-                  return DriverHomePage();
+                  return DriverDashboardPage();
                 } else {
                   // Profile එක තිබුණත් role එක නැත්නම් හෝ වැරදි නම්, role තෝරාගැනීමේ පිටුවට යොමු කරයි
                   // මෙය අලුත් user කෙනෙක්ට හෝ role එකක් නැති user කෙනෙක්ට අදාළ වේ.

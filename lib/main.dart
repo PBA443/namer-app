@@ -8,11 +8,13 @@ import 'firebase_options.dart';
 // අපේ StaffRideApp එක තියෙන file එක import කරගන්න
 import 'app.dart'; // (ඔබේ app.dart file එකට අදාළව)
 
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
 // main function එක async බවට පත් කරනවා
 Future<void> main() async {
   // Flutter engine එක හරියටම පටන් ගත්තා කියලා තහවුරු කරගන්නවා
   WidgetsFlutterBinding.ensureInitialized();
-
+  await dotenv.load(fileName: ".env");
   // Firebase සේවාවන් පටන් ගන්නකන් බලාගෙන ඉන්නවා
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
