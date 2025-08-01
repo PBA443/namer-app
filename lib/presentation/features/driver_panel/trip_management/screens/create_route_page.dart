@@ -7,7 +7,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geocoding/geocoding.dart';
-import 'package:flutter_polyline_points/flutter_polyline_points.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'package:flutter_polyline_points/flutter_polyline_points.dart'; // Only for polyline decoding
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_places_flutter/google_places_flutter.dart';
 import 'confirm_schedule_page.dart';
@@ -49,52 +51,36 @@ class _CreateRoutePageState extends State<CreateRoutePage> {
   }
 
   // --- THIS FUNCTION IS NOW FIXED TO GET ALTERNATIVE ROUTES ---
+
   Future<void> _getDirections() async {
     if (_routePoints.length < 2) return;
 
-    _polylines.clear();
-    final PolylinePoints polylinePoints = PolylinePoints(apiKey: _googleApiKey);
+    final origin =
+        "${_routePoints.first.latitude},${_routePoints.first.longitude}";
+    final destination =
+        "${_routePoints.last.latitude},${_routePoints.last.longitude}";
 
     final waypoints = _routePoints.length > 2
-        ? _routePoints
-              .sublist(1, _routePoints.length - 1)
-              .map(
-                (p) =>
-                    PolylineWayPoint(location: "${p.latitude},${p.longitude}"),
-              )
-              .toList()
-        : null;
+        ? "&waypoints=${_routePoints.sublist(1, _routePoints.length - 1).map((p) => "${p.latitude},${p.longitude}").join('|')}"
+        : '';
 
-    final request = RoutesApiRequest(
-      origin: PointLatLng(
-        _routePoints.first.latitude,
-        _routePoints.first.longitude,
-      ),
-      destination: PointLatLng(
-        _routePoints.last.latitude,
-        _routePoints.last.longitude,
-      ),
-      travelMode: TravelMode.driving,
-      computeAlternativeRoutes: true, // <-- THIS IS THE FIX
-      intermediates: waypoints,
-    );
+    final url =
+        "https://maps.googleapis.com/maps/api/directions/json?origin=$origin&destination=$destination$waypoints&alternatives=true&key=$_googleApiKey";
 
-    final response = await polylinePoints.getRouteBetweenCoordinatesV2(
-      request: request,
-    );
+    final response = await http.get(Uri.parse(url));
+    final data = jsonDecode(response.body);
 
-    if (response.routes.isNotEmpty) {
-      for (int i = 0; i < response.routes.length; i++) {
+    if (data['status'] == 'OK') {
+      _polylines.clear();
+      final routes = data['routes'];
+      for (int i = 0; i < routes.length; i++) {
         final polylineId = PolylineId('route_$i');
-        final route = response.routes[i];
+        final overviewPolyline = routes[i]['overview_polyline']['points'];
+        final points = PolylinePoints.decodePolyline(overviewPolyline);
 
         final polyline = Polyline(
           polylineId: polylineId,
-          points:
-              route.polylinePoints
-                  ?.map((p) => LatLng(p.latitude, p.longitude))
-                  .toList() ??
-              [],
+          points: points.map((e) => LatLng(e.latitude, e.longitude)).toList(),
           color: i == 0 ? Colors.blueAccent : Colors.grey,
           width: 5,
           zIndex: i == 0 ? 1 : 0,
@@ -102,9 +88,8 @@ class _CreateRoutePageState extends State<CreateRoutePage> {
           onTap: () {
             setState(() {
               _selectedPolylineId = polylineId;
-              _totalDistance =
-                  "${(route.distanceMeters! / 1000).toStringAsFixed(1)} km";
-              _totalDuration = "${(route.duration! / 60).round()} mins";
+              _totalDistance = routes[i]['legs'][0]['distance']['text'];
+              _totalDuration = routes[i]['legs'][0]['duration']['text'];
               _polylines.forEach((key, value) {
                 _polylines[key] = value.copyWith(
                   colorParam: key == _selectedPolylineId
@@ -116,17 +101,17 @@ class _CreateRoutePageState extends State<CreateRoutePage> {
             });
           },
         );
+
         _polylines[polylineId] = polyline;
       }
+
       setState(() {
         _selectedPolylineId = const PolylineId('route_0');
-        final firstRoute = response.routes.first;
-        _totalDistance =
-            "${(firstRoute.distanceMeters! / 1000).toStringAsFixed(1)} km";
-        _totalDuration = "${(firstRoute.duration! / 60).round()} mins";
+        _totalDistance = routes[0]['legs'][0]['distance']['text'];
+        _totalDuration = routes[0]['legs'][0]['duration']['text'];
       });
     } else {
-      _showErrorSnackBar("Could not get directions. Please try again.");
+      _showErrorSnackBar("Directions error: ${data['status']}");
     }
   }
 
@@ -305,7 +290,12 @@ class _CreateRoutePageState extends State<CreateRoutePage> {
               markers: _markers,
               polylines: Set<Polyline>.of(_polylines.values),
               onMapCreated: (controller) => _mapController = controller,
-              onTap: _onMapTapped,
+              onTap: (LatLng location) {
+                FocusScope.of(
+                  context,
+                ).unfocus(); // මේ line එක අලුතින් එකතු කරන්න
+                _onMapTapped(location);
+              },
               myLocationEnabled: true,
               myLocationButtonEnabled: true,
             ),

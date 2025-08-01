@@ -1,17 +1,14 @@
-// ---------------------------------------------------
-// FILE 3: lib/presentation/features/driver_panel/trip_management/screens/trip_details_page.dart (Updated File)
-// ---------------------------------------------------
-// This page now listens for new bookings and displays user markers on the map.
-// ---------------------------------------------------
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_polyline_points/flutter_polyline_points.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:http/http.dart' as http;
 import 'package:location/location.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import '../../../../../data/services/firestore_service.dart';
 
 class TripDetailsPage extends StatefulWidget {
@@ -30,13 +27,14 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
 
   GoogleMapController? _mapController;
   final Set<Marker> _markers = {};
+  final Map<String, Marker> _userMarkers = {};
   final Set<Polyline> _polylines = {};
   BitmapDescriptor? _driverIcon;
 
   Future<DocumentSnapshot>? _tripFuture;
   Map<String, dynamic>? _tripData;
   bool get _isTripActive => _tripData?['status'] == 'active';
-
+  bool _isLoading = false;
   bool _areIconsLoaded = false;
 
   @override
@@ -64,16 +62,9 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
         const ImageConfiguration(size: Size(96, 96)),
         'assets/images/driver_icon.png',
       );
-
-      if (mounted) {
-        setState(() {
-          _areIconsLoaded = true;
-        });
-      }
+      if (mounted) setState(() => _areIconsLoaded = true);
     } catch (e) {
-      print(
-        "WARNING: Could not load custom driver icon. Using default. Error: $e",
-      );
+      print("Could not load custom driver icon: $e");
     }
   }
 
@@ -84,27 +75,20 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
           for (var doc in snapshot.docs) {
             final booking = doc.data() as Map<String, dynamic>;
             print("New booking by: ${booking['userName']}");
-            setState(() {
-              _markers.add(
-                Marker(
-                  markerId: MarkerId('user_${booking['userId']}'),
-                  position: const LatLng(6.9022, 79.8612), // Placeholder
-                  infoWindow: InfoWindow(title: booking['userName']),
-                  icon: BitmapDescriptor.defaultMarkerWithHue(
-                    BitmapDescriptor.hueViolet,
-                  ),
-                ),
-              );
-            });
           }
         });
   }
 
   Future<void> _activateTrip() async {
+    setState(() => _isLoading = true);
+
     await FirestoreService().updateTripStatus(widget.tripId, 'active');
 
     final websocketUrl = dotenv.env['WEBSOCKET_URL'];
-    if (websocketUrl == null || websocketUrl.isEmpty) return;
+    if (websocketUrl == null || websocketUrl.isEmpty) {
+      setState(() => _isLoading = false);
+      return;
+    }
 
     _socket = IO.io(
       websocketUrl,
@@ -112,44 +96,61 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     );
     _socket!.onConnect((_) => print('Connected to WebSocket server'));
     _socket!.onDisconnect((_) => print('Disconnected from WebSocket server'));
+
     _socket!.on('bookedUsersLocations', (data) {
-      print('Received user locations: $data');
+      if (data is Map &&
+          data.containsKey('userId') &&
+          data.containsKey('lat') &&
+          data.containsKey('lng')) {
+        _updateUserMarker(
+          data['userId'] as String,
+          LatLng(data['lat'] as double, data['lng'] as double),
+        );
+      }
     });
 
-    bool serviceEnabled = await _locationService.serviceEnabled();
-    if (!serviceEnabled)
-      serviceEnabled = await _locationService.requestService();
-    if (!serviceEnabled) return;
-
-    PermissionStatus permissionGranted = await _locationService.hasPermission();
-    if (permissionGranted == PermissionStatus.denied) {
-      permissionGranted = await _locationService.requestPermission();
-      if (permissionGranted != PermissionStatus.granted) return;
+    final serviceEnabled = await _locationService.serviceEnabled() ?? false;
+    if (!serviceEnabled && !(await _locationService.requestService())) {
+      setState(() => _isLoading = false);
+      return;
     }
 
-    var initialLocation = await _locationService.getLocation();
-    _updateDriverMarker(initialLocation);
+    final permissionGranted = await _locationService.hasPermission();
+    if (permissionGranted == PermissionStatus.denied &&
+        await _locationService.requestPermission() !=
+            PermissionStatus.granted) {
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    final initialLocation = await _locationService.getLocation();
+    if (initialLocation.latitude != null && initialLocation.longitude != null) {
+      _updateDriverMarker(initialLocation);
+    }
 
     _locationSubscription = _locationService.onLocationChanged.listen((
-      currentLocation,
+      location,
     ) {
-      _updateDriverMarker(currentLocation);
-      final locationData = {
+      _updateDriverMarker(location);
+      _socket?.emit('updateLocation', {
         'tripId': widget.tripId,
-        'lat': currentLocation.latitude,
-        'lng': currentLocation.longitude,
-      };
-      _socket?.emit('updateLocation', locationData);
+        'lat': location.latitude,
+        'lng': location.longitude,
+      });
     });
 
     setState(() {
       _tripData?['status'] = 'active';
+      _isLoading = false;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("Trip is now active and tracking has started!"),
-      ),
-    );
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Trip is now active and tracking has started!"),
+        ),
+      );
+    }
   }
 
   void _updateDriverMarker(LocationData locationData) {
@@ -169,11 +170,25 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
         ),
       );
     });
+
     _mapController?.animateCamera(
       CameraUpdate.newLatLng(
         LatLng(locationData.latitude!, locationData.longitude!),
       ),
     );
+  }
+
+  void _updateUserMarker(String userId, LatLng location) {
+    if (!mounted) return;
+
+    setState(() {
+      _userMarkers['user_$userId'] = Marker(
+        markerId: MarkerId('user_$userId'),
+        position: location,
+        infoWindow: InfoWindow(title: 'User: $userId'),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
+      );
+    });
   }
 
   Future<void> _deactivateTrip({bool isDisposing = false}) async {
@@ -185,108 +200,153 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
 
     if (!isDisposing) {
       await FirestoreService().updateTripStatus(widget.tripId, 'completed');
-      setState(() {
-        _tripData?['status'] = 'completed';
-      });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Trip has been completed!")));
+      setState(() => _tripData?['status'] = 'completed');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Trip has been completed!")),
+        );
+      }
     }
   }
 
-  void _getDirectionsAndDrawRoute(Map<String, dynamic> tripData) async {
-    final dynamic rawRoutePoints = tripData['routePoints'];
-    if (rawRoutePoints == null ||
-        rawRoutePoints is! List ||
-        rawRoutePoints.isEmpty)
+  Future<void> _drawRoute(List<dynamic> rawRoutePoints) async {
+    if (rawRoutePoints.isEmpty) return;
+
+    // Convert Firestore GeoPoints to LatLng
+    final waypoints = rawRoutePoints
+        .whereType<GeoPoint>()
+        .map((p) => LatLng(p.latitude, p.longitude))
+        .toList();
+
+    if (waypoints.length < 2) return;
+
+    final apiKey = dotenv.env['GOOGLE_MAPS_API_KEY'] ?? "";
+    if (apiKey.isEmpty) {
+      print("Google Maps API key not found");
       return;
-    if (_polylines.isNotEmpty) return;
-
-    final List<LatLng> points = [];
-    for (var p in rawRoutePoints) {
-      if (p is GeoPoint) {
-        points.add(LatLng(p.latitude, p.longitude));
-      }
     }
-    if (points.length < 2) return;
 
-    final String apiKey = dotenv.env['GOOGLE_MAPS_API_KEY'] ?? "";
-    final PolylinePoints polylinePoints = PolylinePoints(apiKey: apiKey);
+    try {
+      // Build the waypoints parameter for the API
+      String waypointsParam = '';
+      if (waypoints.length > 2) {
+        final intermediate = waypoints
+            .sublist(1, waypoints.length - 1)
+            .map((p) => "${p.latitude},${p.longitude}")
+            .join('|');
+        waypointsParam = "&waypoints=optimize:true|$intermediate";
+      }
 
-    PolylineResult result = await polylinePoints.getRouteBetweenCoordinates(
-      request: PolylineRequest(
-        origin: PointLatLng(points.first.latitude, points.first.longitude),
-        destination: PointLatLng(points.last.latitude, points.last.longitude),
-        mode: TravelMode.driving,
-      ),
-    );
+      final url =
+          "https://maps.googleapis.com/maps/api/directions/json?"
+          "origin=${waypoints.first.latitude},${waypoints.first.longitude}"
+          "&destination=${waypoints.last.latitude},${waypoints.last.longitude}"
+          "$waypointsParam"
+          "&key=$apiKey";
 
-    if (result.points.isNotEmpty) {
-      List<LatLng> polylineCoordinates = result.points
-          .map((point) => LatLng(point.latitude, point.longitude))
-          .toList();
+      final response = await http.get(Uri.parse(url));
+      final data = jsonDecode(response.body);
 
-      if (mounted) {
+      if (data['status'] == 'OK' && data['routes'].isNotEmpty) {
+        final route = data['routes'][0];
+        final points = PolylinePoints.decodePolyline(
+          route['overview_polyline']['points'],
+        ).map((p) => LatLng(p.latitude, p.longitude)).toList();
+
         setState(() {
+          _polylines.clear();
+          _markers.removeWhere((m) => m.markerId.value.startsWith('route_'));
+
+          // Add the proper road route
           _polylines.add(
             Polyline(
-              polylineId: const PolylineId('tripRoute'),
-              points: polylineCoordinates,
+              polylineId: const PolylineId('road_route'),
+              points: points,
               color: Colors.blueAccent,
               width: 5,
             ),
           );
-          _markers.add(
-            Marker(
-              markerId: const MarkerId('start'),
-              position: points.first,
-              icon: BitmapDescriptor.defaultMarkerWithHue(
-                BitmapDescriptor.hueGreen,
-              ),
-            ),
-          );
-          _markers.add(
-            Marker(
-              markerId: const MarkerId('end'),
-              position: points.last,
-              icon: BitmapDescriptor.defaultMarkerWithHue(
-                BitmapDescriptor.hueRed,
-              ),
-            ),
-          );
-        });
 
-        if (_mapController != null) {
-          Future.delayed(const Duration(milliseconds: 200), () {
-            if (mounted) {
-              _mapController!.animateCamera(
-                CameraUpdate.newLatLngBounds(
-                  LatLngBounds(
-                    southwest: LatLng(
-                      polylineCoordinates
-                          .map((p) => p.latitude)
-                          .reduce((a, b) => a < b ? a : b),
-                      polylineCoordinates
-                          .map((p) => p.longitude)
-                          .reduce((a, b) => a < b ? a : b),
-                    ),
-                    northeast: LatLng(
-                      polylineCoordinates
-                          .map((p) => p.latitude)
-                          .reduce((a, b) => a > b ? a : b),
-                      polylineCoordinates
-                          .map((p) => p.longitude)
-                          .reduce((a, b) => a > b ? a : b),
-                    ),
-                  ),
-                  50.0,
+          // Add markers for waypoints
+          for (int i = 0; i < waypoints.length; i++) {
+            _markers.add(
+              Marker(
+                markerId: MarkerId('route_point_$i'),
+                position: waypoints[i],
+                icon: i == 0
+                    ? BitmapDescriptor.defaultMarkerWithHue(
+                        BitmapDescriptor.hueGreen,
+                      )
+                    : i == waypoints.length - 1
+                    ? BitmapDescriptor.defaultMarkerWithHue(
+                        BitmapDescriptor.hueRed,
+                      )
+                    : BitmapDescriptor.defaultMarkerWithHue(
+                        BitmapDescriptor.hueOrange,
+                      ),
+                infoWindow: InfoWindow(
+                  title: i == 0
+                      ? 'Start'
+                      : i == waypoints.length - 1
+                      ? 'End'
+                      : 'Stop ${i}',
                 ),
-              );
-            }
-          });
-        }
+              ),
+            );
+          }
+
+          _fitRouteToScreen(points);
+        });
+      } else {
+        print("Directions API error: ${data['status']}");
+        // Fallback to straight line if API fails
+        _drawStraightLineRoute(waypoints);
+      }
+    } catch (e) {
+      print("Error getting directions: $e");
+      _drawStraightLineRoute(waypoints);
+    }
+  }
+
+  void _drawStraightLineRoute(List<LatLng> points) {
+    setState(() {
+      _polylines.clear();
+      _polylines.add(
+        Polyline(
+          polylineId: const PolylineId('fallback_route'),
+          points: points,
+          color: Colors.grey,
+          width: 3,
+        ),
+      );
+      _fitRouteToScreen(points);
+    });
+  }
+
+  void _fitRouteToScreen(List<LatLng> points) {
+    if (_mapController == null || points.isEmpty) return;
+
+    LatLngBounds bounds = _boundsFromLatLngList(points);
+    _mapController!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 50));
+  }
+
+  LatLngBounds _boundsFromLatLngList(List<LatLng> list) {
+    double? x0, x1, y0, y1;
+    for (LatLng latLng in list) {
+      if (x0 == null) {
+        x0 = x1 = latLng.latitude;
+        y0 = y1 = latLng.longitude;
+      } else {
+        x1 = x1! > latLng.latitude ? x1 : latLng.latitude;
+        x0 = x0 < latLng.latitude ? x0 : latLng.latitude;
+        y1 = y1! > latLng.longitude ? y1 : latLng.longitude;
+        y0 = y0! < latLng.longitude ? y0 : latLng.longitude;
       }
     }
+    return LatLngBounds(
+      northeast: LatLng(x1!, y1!),
+      southwest: LatLng(x0!, y0!),
+    );
   }
 
   @override
@@ -302,16 +362,21 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snapshot.hasError) {
-            return Center(child: Text("Error: ${snapshot.error}"));
-          }
-          if (!snapshot.hasData || !snapshot.data!.exists) {
-            return const Center(child: Text("Trip not found."));
+          if (snapshot.hasError ||
+              !snapshot.hasData ||
+              !snapshot.data!.exists) {
+            return const Center(
+              child: Text("Trip not found or error loading data."),
+            );
           }
 
-          if (_tripData == null) {
-            _tripData = snapshot.data!.data() as Map<String, dynamic>;
+          _tripData ??= snapshot.data!.data() as Map<String, dynamic>;
+          if (_tripData?['routePoints'] != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _drawRoute(_tripData!['routePoints']);
+            });
           }
+
           final startTime = (_tripData!['startTime'] as Timestamp).toDate();
 
           return Stack(
@@ -321,14 +386,11 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
                   target: LatLng(6.9271, 79.8612),
                   zoom: 12,
                 ),
-                onMapCreated: (controller) {
-                  if (mounted) {
-                    _mapController = controller;
-                    _getDirectionsAndDrawRoute(_tripData!);
-                  }
-                },
-                markers: _markers,
+                onMapCreated: (controller) => _mapController = controller,
+                markers: {..._markers, ..._userMarkers.values},
                 polylines: _polylines,
+                myLocationEnabled: true,
+                myLocationButtonEnabled: true,
               ),
               Positioned(
                 bottom: 0,
@@ -365,7 +427,7 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
                         ),
                         const Divider(height: 24),
                         Text(
-                          'Scheduled for: ${DateFormat('MMM d, yyyy  hh:mm a').format(startTime)}',
+                          'Scheduled for: ${DateFormat('MMM d, yyyy hh:mm a').format(startTime)}',
                         ),
                         const SizedBox(height: 20),
                         SizedBox(
@@ -374,7 +436,9 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
                               ? ElevatedButton.icon(
                                   icon: const Icon(Icons.stop_circle_outlined),
                                   label: const Text('END TRIP'),
-                                  onPressed: () => _deactivateTrip(),
+                                  onPressed: _isLoading
+                                      ? null
+                                      : () => _deactivateTrip(),
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: Colors.redAccent,
                                     foregroundColor: Colors.white,
@@ -389,8 +453,12 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
                                 )
                               : ElevatedButton.icon(
                                   icon: const Icon(Icons.play_arrow),
-                                  label: const Text('ACTIVATE TRIP'),
-                                  onPressed: _activateTrip,
+                                  label: _isLoading
+                                      ? const CircularProgressIndicator(
+                                          color: Colors.white,
+                                        )
+                                      : const Text('ACTIVATE TRIP'),
+                                  onPressed: _isLoading ? null : _activateTrip,
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: Colors.green,
                                     foregroundColor: Colors.white,

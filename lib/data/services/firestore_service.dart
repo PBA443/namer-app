@@ -131,7 +131,7 @@ class FirestoreService {
         'routePoints': routePoints
             .map((p) => GeoPoint(p.latitude, p.longitude))
             .toList(),
-        'status': 'active',
+        'status': 'pending',
         'recurringId': recurringId,
         'createdAt': FieldValue.serverTimestamp(),
       });
