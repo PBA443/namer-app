@@ -53,7 +53,7 @@ class _SignInPageState extends State<SignInPage> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 SvgPicture.asset(
-                  'assets/images/staffride_logo.svg',
+                  'assets/images/staff.svg',
                   width: 120,
                   height: 120,
                 ),

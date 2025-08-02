@@ -4,8 +4,10 @@
 // Timing issues, location permissions, and route drawing logic have been fixed.
 // ---------------------------------------------------
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:http/http.dart' as http;
 import 'package:location/location.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -84,11 +86,13 @@ class _UserTripTrackingPageState extends State<UserTripTrackingPage> {
   }
 
   void _connectAndListen() async {
+    // Ensure location services and permission
     bool serviceEnabled = await _locationService.serviceEnabled();
     if (!serviceEnabled) {
       serviceEnabled = await _locationService.requestService();
       if (!serviceEnabled) return;
     }
+
     PermissionStatus permissionGranted = await _locationService.hasPermission();
     if (permissionGranted == PermissionStatus.denied) {
       permissionGranted = await _locationService.requestPermission();
@@ -96,17 +100,35 @@ class _UserTripTrackingPageState extends State<UserTripTrackingPage> {
     }
 
     final websocketUrl = dotenv.env['WEBSOCKET_URL'];
-    if (websocketUrl == null) return;
+    if (websocketUrl == null || websocketUrl.isEmpty) return;
+
+    final user = AuthService().currentUser;
+    if (user == null) return;
+
+    // Connect to WebSocket
     _socket = IO.io(
       websocketUrl,
       IO.OptionBuilder().setTransports(['websocket']).build(),
     );
-    _socket!.onConnect((_) => print('Connected to WebSocket server'));
-    _socket!.onDisconnect((_) => print('Disconnected from WebSocket server'));
-    _socket!.connect();
 
-    _socket!.on('newLocation', (data) {
-      print("Received driver location: $data");
+    _socket!.onConnect((_) {
+      print('✅ Connected to WebSocket server');
+      // Join the trip room after connecting
+      _socket!.emit('joinTripRoom', {'tripId': widget.tripId});
+    });
+
+    _socket!.onDisconnect((_) {
+      print('❌ Disconnected from WebSocket server');
+    });
+
+    // For debugging all events
+    _socket!.onAny((event, data) {
+      print('📩 Event: $event | Data: $data');
+    });
+
+    // Listen for driver's location updates
+    _socket!.on('driverLocationUpdate', (data) {
+      print("🚗 Received driver location: $data");
       final lat = data['lat'];
       final lng = data['lng'];
       if (mounted && lat != null && lng != null) {
@@ -114,19 +136,23 @@ class _UserTripTrackingPageState extends State<UserTripTrackingPage> {
       }
     });
 
+    // Send user's location continuously
     _locationSubscription = _locationService.onLocationChanged.listen((
       location,
     ) {
-      final user = AuthService().currentUser;
-      if (user == null) return;
-
-      final locationData = {
-        'tripId': widget.tripId, // අලුතින් එකතු කළා: tripId එකත් යවනවා
-        'lat': location.latitude,
-        'lng': location.longitude,
-      };
-      _socket?.emit('sendLocation', locationData);
+      if (_socket?.connected == true) {
+        final locationData = {
+          'tripId': widget.tripId,
+          'role': 'user',
+          'userId': user.uid,
+          'lat': location.latitude,
+          'lng': location.longitude,
+        };
+        _socket!.emit('updateLocation', locationData);
+      }
     });
+
+    _socket!.connect();
   }
 
   void _updateDriverMarker(LatLng location) {
@@ -155,84 +181,99 @@ class _UserTripTrackingPageState extends State<UserTripTrackingPage> {
     if (routeGeoPoints.length < 2 || _polylines.isNotEmpty) return;
 
     final List<LatLng> routePoints = routeGeoPoints
+        .whereType<GeoPoint>()
         .map((p) => LatLng(p.latitude, p.longitude))
         .toList();
-    final String apiKey = dotenv.env['Maps_API_KEY'] ?? "";
-    final PolylinePoints polylinePoints = PolylinePoints(apiKey: apiKey);
 
-    PolylineResult result = await polylinePoints.getRouteBetweenCoordinates(
-      request: PolylineRequest(
-        origin: PointLatLng(
-          routePoints.first.latitude,
-          routePoints.first.longitude,
-        ),
-        destination: PointLatLng(
-          routePoints.last.latitude,
-          routePoints.last.longitude,
-        ),
-        mode: TravelMode.driving,
-      ),
-    );
+    final apiKey = dotenv.env['GOOGLE_MAPS_API_KEY'] ?? "";
+    if (apiKey.isEmpty) {
+      print("❌ Google Maps API key not found");
+      return;
+    }
 
-    if (result.points.isNotEmpty) {
-      List<LatLng> polylineCoordinates = result.points
-          .map((point) => LatLng(point.latitude, point.longitude))
-          .toList();
-
-      if (mounted) {
-        setState(() {
-          _polylines.add(
-            Polyline(
-              polylineId: const PolylineId('tripRoute'),
-              points: polylineCoordinates,
-              color: Colors.blueAccent,
-              width: 5,
-            ),
-          );
-          _markers.add(
-            Marker(
-              markerId: const MarkerId('start'),
-              position: routePoints.first,
-              icon: BitmapDescriptor.defaultMarkerWithHue(
-                BitmapDescriptor.hueGreen,
-              ),
-            ),
-          );
-          _markers.add(
-            Marker(
-              markerId: const MarkerId('end'),
-              position: routePoints.last,
-              icon: BitmapDescriptor.defaultMarkerWithHue(
-                BitmapDescriptor.hueRed,
-              ),
-            ),
-          );
-        });
-
-        _mapController?.animateCamera(
-          CameraUpdate.newLatLngBounds(
-            LatLngBounds(
-              southwest: LatLng(
-                polylineCoordinates
-                    .map((p) => p.latitude)
-                    .reduce((a, b) => a < b ? a : b),
-                polylineCoordinates
-                    .map((p) => p.longitude)
-                    .reduce((a, b) => a < b ? a : b),
-              ),
-              northeast: LatLng(
-                polylineCoordinates
-                    .map((p) => p.latitude)
-                    .reduce((a, b) => a > b ? a : b),
-                polylineCoordinates
-                    .map((p) => p.longitude)
-                    .reduce((a, b) => a > b ? a : b),
-              ),
-            ),
-            50.0,
-          ),
-        );
+    try {
+      String waypointsParam = '';
+      if (routePoints.length > 2) {
+        final intermediate = routePoints
+            .sublist(1, routePoints.length - 1)
+            .map((p) => "${p.latitude},${p.longitude}")
+            .join('|');
+        waypointsParam = "&waypoints=optimize:true|$intermediate";
       }
+
+      final url =
+          "https://maps.googleapis.com/maps/api/directions/json?"
+          "origin=${routePoints.first.latitude},${routePoints.first.longitude}"
+          "&destination=${routePoints.last.latitude},${routePoints.last.longitude}"
+          "$waypointsParam"
+          "&key=$apiKey";
+
+      final response = Uri.parse(url).resolveUri(Uri());
+      final data = await http.get(response);
+      final decoded = jsonDecode(data.body);
+
+      if (decoded['status'] == 'OK' && decoded['routes'].isNotEmpty) {
+        final route = decoded['routes'][0];
+        final points = PolylinePoints.decodePolyline(
+          route['overview_polyline']['points'],
+        ).map((p) => LatLng(p.latitude, p.longitude)).toList();
+
+        if (mounted) {
+          setState(() {
+            _polylines.add(
+              Polyline(
+                polylineId: const PolylineId('tripRoute'),
+                points: points,
+                color: Colors.blueAccent,
+                width: 5,
+              ),
+            );
+
+            _markers.add(
+              Marker(
+                markerId: const MarkerId('start'),
+                position: routePoints.first,
+                icon: BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueGreen,
+                ),
+              ),
+            );
+            _markers.add(
+              Marker(
+                markerId: const MarkerId('end'),
+                position: routePoints.last,
+                icon: BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueRed,
+                ),
+              ),
+            );
+          });
+
+          _mapController?.animateCamera(
+            CameraUpdate.newLatLngBounds(
+              LatLngBounds(
+                southwest: LatLng(
+                  points.map((p) => p.latitude).reduce((a, b) => a < b ? a : b),
+                  points
+                      .map((p) => p.longitude)
+                      .reduce((a, b) => a < b ? a : b),
+                ),
+                northeast: LatLng(
+                  points.map((p) => p.latitude).reduce((a, b) => a > b ? a : b),
+                  points
+                      .map((p) => p.longitude)
+                      .reduce((a, b) => a > b ? a : b),
+                ),
+              ),
+              50.0,
+            ),
+          );
+        }
+      } else {
+        print("❌ Google Directions API error: ${decoded['status']}");
+      }
+    } catch (e) {
+      print("❌ Error fetching directions: $e");
     }
   }
 

@@ -168,6 +168,16 @@ class FirestoreService {
     }
   }
 
+  /// 🔄 Realtime trip document listener (useful for status/location changes)
+  Stream<DocumentSnapshot> getTripDetailsStream(String tripId) {
+    try {
+      return _db.collection(_tripsCollection).doc(tripId).snapshots();
+    } catch (e) {
+      debugPrint("🔥 Error streaming trip details: $e");
+      rethrow;
+    }
+  }
+
   Future<void> updateTripStatus(String tripId, String status) async {
     try {
       await _db.collection(_tripsCollection).doc(tripId).update({
@@ -205,10 +215,15 @@ class FirestoreService {
   }
 
   Stream<QuerySnapshot> getBookingsForTrip(String tripId) {
-    return _db
-        .collection(_bookingsCollection)
-        .where('tripId', isEqualTo: tripId)
-        .where('status', isEqualTo: 'booked')
-        .snapshots();
+    try {
+      return _db
+          .collection(_bookingsCollection)
+          .where('tripId', isEqualTo: tripId)
+          .where('status', isEqualTo: 'booked')
+          .snapshots();
+    } catch (e) {
+      debugPrint("🔥 Error fetching bookings: $e");
+      rethrow;
+    }
   }
 }

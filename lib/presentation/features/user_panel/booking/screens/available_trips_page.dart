@@ -1,14 +1,8 @@
-// ---------------------------------------------------
-// FILE 2: lib/presentation/features/booking/screens/available_trips_page.dart (Updated File)
-// ---------------------------------------------------
-// The "Book Now" button now creates a booking in Firestore and
-// navigates to the new UserTripTrackingPage.
-// ---------------------------------------------------
-
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:geolocator/geolocator.dart';
 import '../../../../../data/services/auth_service.dart';
 import '../../../../../data/services/firestore_service.dart';
 import 'user_trip_tracking_page.dart';
@@ -44,19 +38,59 @@ class AvailableTripsPage extends StatelessWidget {
           if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
             return const Center(
               child: Text(
-                "Sorry, no trips are available for this route right now.",
+                "Sorry, no trips are scheduled right now.",
                 textAlign: TextAlign.center,
               ),
             );
           }
 
-          final trips = snapshot.data!.docs;
+          final allTrips = snapshot.data!.docs;
+          final List<DocumentSnapshot> filteredTrips = [];
+          const double matchingRadiusInMeters = 5000;
+
+          for (var tripDoc in allTrips) {
+            final tripData = tripDoc.data() as Map<String, dynamic>;
+            final List<dynamic> routePoints = tripData['routePoints'] ?? [];
+            if (routePoints.length < 2) continue;
+
+            final GeoPoint startGeo = routePoints.first;
+            final GeoPoint endGeo = routePoints.last;
+
+            final double pickupDistance = Geolocator.distanceBetween(
+              pickupLocation.latitude,
+              pickupLocation.longitude,
+              startGeo.latitude,
+              startGeo.longitude,
+            );
+
+            final double dropoffDistance = Geolocator.distanceBetween(
+              dropoffLocation.latitude,
+              dropoffLocation.longitude,
+              endGeo.latitude,
+              endGeo.longitude,
+            );
+
+            if (pickupDistance <= matchingRadiusInMeters &&
+                dropoffDistance <= matchingRadiusInMeters) {
+              filteredTrips.add(tripDoc);
+            }
+          }
+
+          if (filteredTrips.isEmpty) {
+            return const Center(
+              child: Text(
+                "Sorry, no trips match your route at the moment.",
+                textAlign: TextAlign.center,
+              ),
+            );
+          }
 
           return ListView.builder(
-            itemCount: trips.length,
+            itemCount: filteredTrips.length,
             itemBuilder: (context, index) {
-              final trip = trips[index].data() as Map<String, dynamic>;
-              final tripId = trips[index].id;
+              final tripDoc = filteredTrips[index];
+              final trip = tripDoc.data() as Map<String, dynamic>;
+              final tripId = tripDoc.id;
               final startTime = (trip['startTime'] as Timestamp).toDate();
 
               return Card(
@@ -134,6 +168,7 @@ class AvailableTripsPage extends StatelessWidget {
                                     driverId: trip['driverId'],
                                     user: currentUser,
                                   );
+
                               if (context.mounted) {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(

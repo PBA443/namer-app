@@ -23,7 +23,6 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
   IO.Socket? _socket;
   StreamSubscription<LocationData>? _locationSubscription;
   final Location _locationService = Location();
-  StreamSubscription<QuerySnapshot>? _bookingsSubscription;
 
   GoogleMapController? _mapController;
   final Set<Marker> _markers = {};
@@ -45,19 +44,19 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
         .doc(widget.tripId)
         .get();
     _setCustomMarkerIcon();
-    _listenForBookings();
   }
 
   @override
   void dispose() {
     _deactivateTrip(isDisposing: true);
-    _bookingsSubscription?.cancel();
+    _locationSubscription?.cancel();
     _mapController?.dispose();
     super.dispose();
   }
 
   void _setCustomMarkerIcon() async {
     try {
+      // ignore: deprecated_member_use
       _driverIcon = await BitmapDescriptor.fromAssetImage(
         const ImageConfiguration(size: Size(96, 96)),
         'assets/images/driver_icon.png',
@@ -66,17 +65,6 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
     } catch (e) {
       print("Could not load custom driver icon: $e");
     }
-  }
-
-  void _listenForBookings() {
-    _bookingsSubscription = FirestoreService()
-        .getBookingsForTrip(widget.tripId)
-        .listen((snapshot) {
-          for (var doc in snapshot.docs) {
-            final booking = doc.data() as Map<String, dynamic>;
-            print("New booking by: ${booking['userName']}");
-          }
-        });
   }
 
   Future<void> _activateTrip() async {
@@ -94,7 +82,12 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
       websocketUrl,
       IO.OptionBuilder().setTransports(['websocket']).build(),
     );
-    _socket!.onConnect((_) => print('Connected to WebSocket server'));
+
+    _socket!.onConnect((_) {
+      print('Connected to WebSocket server');
+      _socket!.emit('joinTripRoom', {'tripId': widget.tripId});
+    });
+
     _socket!.onDisconnect((_) => print('Disconnected from WebSocket server'));
 
     _socket!.on('bookedUsersLocations', (data) {
@@ -109,7 +102,11 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
       }
     });
 
-    final serviceEnabled = await _locationService.serviceEnabled() ?? false;
+    _socket!.onAny((event, data) {
+      print('📩 Socket Event: $event | Data: $data');
+    });
+
+    final serviceEnabled = await _locationService.serviceEnabled();
     if (!serviceEnabled && !(await _locationService.requestService())) {
       setState(() => _isLoading = false);
       return;
@@ -134,6 +131,7 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
       _updateDriverMarker(location);
       _socket?.emit('updateLocation', {
         'tripId': widget.tripId,
+        'role': 'driver',
         'lat': location.latitude,
         'lng': location.longitude,
       });
@@ -165,6 +163,7 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
           icon: _driverIcon!,
           rotation: locationData.heading ?? 0.0,
           anchor: const Offset(0.5, 0.5),
+          // ignore: deprecated_member_use
           zIndex: 2,
           flat: true,
         ),
@@ -289,7 +288,7 @@ class _TripDetailsPageState extends State<TripDetailsPage> {
                       ? 'Start'
                       : i == waypoints.length - 1
                       ? 'End'
-                      : 'Stop ${i}',
+                      : 'Stop $i',
                 ),
               ),
             );
